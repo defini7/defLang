@@ -27,6 +27,7 @@ namespace guard
 	constexpr auto Operators = Create("+-*/");
 	constexpr auto ParenthesesOpen = Create("([{");
 	constexpr auto ParenthesesClose = Create(")]}");
+	constexpr auto Quotes = Create("'\"");
 }
 
 namespace error
@@ -85,11 +86,12 @@ struct Token
 		Literal_NumericBase16,
 		Literal_NumericBase10,
 		Literal_NumericBase2,
+		Literal_String,
 		Symbol,
 		Operator,
 		Parenthesis_Open,
 		Parenthesis_Close
-	} type;
+	} type = Type::None;
 
 	std::string value;
 
@@ -102,6 +104,7 @@ struct Token
 		case Type::Literal_NumericBase16:  s = "[Literal, Numeric 16 ] "; break;
 		case Type::Literal_NumericBase10:  s = "[Literal, Numeric 10 ] "; break;
 		case Type::Literal_NumericBase2:   s = "[Literal, Numeric 2  ] "; break;
+		case Type::Literal_String:         s = "[Literal, String     ] "; break;
 		case Type::Symbol:			       s = "[Symbol              ] "; break;
 		case Type::Operator:		       s = "[Operator            ] "; break;
 		case Type::Parenthesis_Open:       s = "[Parenthesis, Open   ] "; break;
@@ -129,6 +132,7 @@ public:
 		Literal_NumericBase10,
 		Literal_NumericBase8,
 		Literal_NumericBase2,
+		Literal_String,
 		Operator,
 		Symbol
 	};
@@ -142,7 +146,9 @@ public:
 
 		auto now = input.begin();
 
+		// If they remain 0 at the end then ok
 		int parenthesesBalancer = 0;
+		int quotesBalancer = 0;
 
 		while (now != input.end())
 		{
@@ -162,7 +168,8 @@ public:
 				if (guard::Digits[*now])
 				{
 					token = { Token::Type::None, std::string(1, *now) };
-
+ 
+					// Check for base
 					if (*now == '0')
 					{
 						token.type = Token::Type::Literal_NumericBaseUnknown;
@@ -182,12 +189,23 @@ public:
 					stateNext = State::Operator;
 				}
 
+				// Check for string literal
+				else if (guard::Quotes[*now])
+				{
+					token = { Token::Type::Literal_String, std::string(1, *now) };
+					stateNext = State::Literal_String;
+
+					quotesBalancer++;
+				}
+
+				// Check for symbol (abc123, something_with_underscore)
 				else if (guard::Symbols[*now])
 				{
 					token = { Token::Type::Symbol, std::string(1, *now) };
 					stateNext = State::Symbol;
 				}
 
+				// Check for all kinds of open parentheses
 				else if (guard::ParenthesesOpen[*now])
 				{
 					token = { Token::Type::Parenthesis_Open, std::string(1, *now) };
@@ -196,6 +214,7 @@ public:
 					parenthesesBalancer++;
 				}
 
+				// Check for all kinds of close parentheses
 				else if (guard::ParenthesesClose[*now])
 				{
 					token = { Token::Type::Parenthesis_Close, std::string(1, *now) };
@@ -211,10 +230,13 @@ public:
 			}
 			else
 			{
+				// Perform something based on the current state
+
 				switch (stateNow)
 				{
 				case State::Literal_NumericBase10:
 				{
+					// Check for continuation of numeric literal
 					if (guard::Digits[*now])
 					{
 						token.value += *now;
@@ -223,6 +245,7 @@ public:
 					}
 					else
 					{
+						// Something has occured in the number (e.g. 531abc14124)
 						if (guard::Symbols[*now])
 							throw error::Parser("Invalid numeric literal or symbol");
 
@@ -235,6 +258,8 @@ public:
 				{
 					if (guard::Prefixes[*now])
 					{
+						// Determine base of numeric literal
+
 						if (*now == 'x' || *now == 'X')
 						{
 							stateNext = State::Literal_NumericBase16;
@@ -256,6 +281,8 @@ public:
 
 				case State::Literal_NumericBase16:
 				{
+					// Read hexadecimal 
+
 					if (guard::HexDigits[*now])
 					{
 						token.value += *now;
@@ -274,6 +301,8 @@ public:
 
 				case State::Literal_NumericBase2:
 				{
+					// Read binary
+
 					if (guard::HexDigits[*now])
 					{
 						token.value += *now;
@@ -290,10 +319,29 @@ public:
 				}
 				break;
 
+				case State::Literal_String:
+				{
+					// Read string
+
+					if (guard::Quotes[*now])
+					{
+						quotesBalancer--;
+						stateNext = State::CompleteToken;
+					}
+					else
+					{
+						token.value += *now;
+						stateNext = State::Literal_String;
+						now++;
+					}
+				}
+				break;
+
 				case State::Operator:
 				{
 					if (guard::Operators[*now])
 					{
+						// If we found an operator then continue searching for a longer operator
 						if (s_Operators.contains(token.value + *now))
 						{
 							token.value += *now;
@@ -303,10 +351,16 @@ public:
 						}
 						else
 						{
+							// If we don't have operator with the currently appended character then
+							// proceed with the current operator
 							if (s_Operators.contains(token.value))
 								stateNext = State::CompleteToken;
 							else
 							{
+								// If on the current stage we still can't find an operator
+								// then probably the operator is not completed yet
+								// so continue appending characters
+
 								token.value += *now;
 								stateNext = State::Operator;
 
@@ -316,6 +370,8 @@ public:
 					}
 					else
 					{
+						// If current character is not a part of the operator characters
+						// and current text is a valid operator say that it's done
 						if (s_Operators.contains(token.value))
 							stateNext = State::CompleteToken;
 						else
@@ -326,6 +382,7 @@ public:
 
 				case State::Symbol:
 				{
+					// Note: we treat all invalid symbols (e.g. 123abc) in the Literal_Numeric state
 					if (guard::Symbols[*now] || guard::Digits[*now])
 					{
 						token.value += *now;
@@ -354,6 +411,10 @@ public:
 		if (parenthesesBalancer != 0)
 			throw error::Parser("Parentheses were not balanced");
 
+		if (quotesBalancer != 0)
+			throw error::Parser("Quotes were not balanced");
+
+		// Drain out a last token
 		if (!token.value.empty())
 			tokens.push_back(token);
 	}
@@ -365,6 +426,8 @@ std::unordered_map<std::string, Operator> Parser::s_Operators =
 	{"+", { Operator::Type::Addition, 1, 2 } },
 	{"*", { Operator::Type::Multiplication, 2, 2 } },
 	{"/", { Operator::Type::Division, 2, 2 } },
+
+	// Unary operators (in that way they are easier to handle)
 	{"u-", { Operator::Type::Subtraction, UINT8_MAX, 1 } },
 	{"u+", { Operator::Type::Addition, UINT8_MAX, 1 } },
 };
@@ -385,6 +448,9 @@ public:
 
 		for (auto token : tokens)
 		{
+			// Convert all numeric literals of the bases other than 10 into base10
+			// so it becomes easier to work with them later
+
 			switch (token.type)
 			{
 			case Token::Type::Literal_NumericBase16:
@@ -410,18 +476,22 @@ public:
 			{
 				Operator op = Parser::s_Operators[token.value];
 				
+				// Check for an unary operator
 				if (token.value == "+" || token.value == "-")
 				{
 					if ((prev.type != Token::Type::Literal_NumericBase10 && prev.type != Token::Type::Parenthesis_Close) || prev.type == Token::Type::None)
 						token.value = "u" + token.value;
 				}
 
+				// Drain the stack out to the output stack until there's nothing to take or
+				// the precedence of the current token is less than the precedence of the top-stack token
 				while (!holding.empty() && holding.back().type != Token::Type::Parenthesis_Open && op.precedence <= Parser::s_Operators[holding.back().value].precedence)
 				{
 					output.push_back(holding.back());
 					holding.pop_back();
 				}
 
+				// only then append current tokin to the holding stack
 				holding.push_back(token);
 			}
 			break;
@@ -432,12 +502,14 @@ public:
 
 			case Token::Type::Parenthesis_Close:
 			{
+				// Drain the holding stack out until an open parenthesis
 				while (holding.back().type != Token::Type::Parenthesis_Open)
 				{
 					output.push_back(holding.back());
 					holding.pop_back();
 				}
-
+				
+				// And remove the parenthesis by itself
 				holding.pop_back();
 			}
 			break;
@@ -447,16 +519,12 @@ public:
 			prev = token;
 		}
 
+		// Drain out the holding stack at the end
 		while (!holding.empty())
 		{
 			output.push_back(holding.back());
 			holding.pop_back();
 		}
-
-		std::cout << std::endl;
-
-		for (const auto& token : output)
-			std::cout << token.str() << std::endl;
 		
 		while (!output.empty())
 		{
@@ -466,6 +534,7 @@ public:
 			{
 			case Token::Type::Literal_NumericBase10:
 			{
+				// Just push every literal to the solving stack
 				solving.push_back(token);
 				output.pop_front();
 			}
@@ -477,6 +546,7 @@ public:
 
 				std::vector<Token> arguments(op.arguments);
 
+				// Save all operator arguments if there are enough on the stack
 				if (solving.size() >= op.arguments)
 				{
 					for (auto& arg : arguments)
@@ -487,38 +557,49 @@ public:
 				}
 				else
 					throw error::Interpreter("Not enough arguments for the operator: " + token.value);
+
+				Token token;
 				
 				switch (op.arguments)
 				{
 				case 1:
 				{
+					// Handle unary operators
+
 					double val = std::stod(arguments[0].value);
+
+					token.type = Token::Type::Literal_NumericBase10;
 
 					switch (op.type)
 					{
-					case Operator::Type::Subtraction:    solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(-val) }); break;
-					case Operator::Type::Addition:       solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(+val) }); break;
+					case Operator::Type::Subtraction: token.value = std::to_string(-val); break;
+					case Operator::Type::Addition:    token.value = std::to_string(+val); break;
 					}
 				}
 				break;
 
 				case 2:
 				{
+					// Handle binary operators
+
 					double lhs = std::stod(arguments[1].value);
 					double rhs = std::stod(arguments[0].value);
 
+					token.type = Token::Type::Literal_NumericBase10;
+
 					switch (op.type)
 					{
-					case Operator::Type::Subtraction:    solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(lhs - rhs) }); break;
-					case Operator::Type::Addition:       solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(lhs + rhs) }); break;
-					case Operator::Type::Multiplication: solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(lhs * rhs) }); break;
-					case Operator::Type::Division:       solving.push_back({ Token::Type::Literal_NumericBase10, std::to_string(lhs / rhs) }); break;
+					case Operator::Type::Subtraction:    token.value = std::to_string(lhs - rhs); break;
+					case Operator::Type::Addition:       token.value = std::to_string(lhs + rhs); break;
+					case Operator::Type::Multiplication: token.value = std::to_string(lhs * rhs); break;
+					case Operator::Type::Division:       token.value = std::to_string(lhs / rhs); break;
 					}
 				}
 				break;
 
 				}
 
+				solving.push_back(token);
 				output.pop_front();
 			}
 			break;
@@ -526,35 +607,40 @@ public:
 			}
 		}
 
+		// Just for now we only have double as a result
 		return std::stod(solving.back().value);
 	}
 };
 
 int main()
 {
-	std::string input = "0b0100 + 0xFF";
-
 	Parser parser;
 	Interpreter interpreter;
 
-	std::cout << input << std::endl << std::endl;
+	std::string input;
 
-	try
+	// Simple REPL
+	do
 	{
-		std::vector<Token> tokens;
-		parser.Tokenise(input, tokens);
+		std::cout << "> ";
+		std::getline(std::cin, input);
 
-		for (const auto& token : tokens)
-			std::cout << token.str() << std::endl;
+		try
+		{
+			std::vector<Token> tokens;
+			parser.Tokenise(input, tokens);
 
-		double result = interpreter.Solve(tokens);
+			for (const auto& token : tokens)
+				std::cout << token.str() << std::endl;
 
-		std::cout << result << std::endl;
-	}
-	catch (const error::Parser& e)
-	{
-		std::cerr << e.what() << std::endl;
-	}
+			double result = interpreter.Solve(tokens);
+			std::cout << result << std::endl;
+		}
+		catch (const error::Parser& e)
+		{
+			std::cerr << e.what() << std::endl;
+		}
+	} while (input != "quit");
 
 	return 0;
 }
