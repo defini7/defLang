@@ -32,34 +32,30 @@ namespace guard
 
 namespace error
 {
-	struct Parser : std::exception
+	struct Exception : std::exception
 	{
-		Parser(const std::string& message)
+		Exception(const std::string& message)
 		{
-			Message = "[Parse Error] " + message;
+			m_Message = message;
 		}
 
 		const char* what() const override
 		{
-			return Message.c_str();
+			return m_Message.c_str();
 		}
 
-		std::string Message;
+	private:
+		std::string m_Message;
 	};
 
-	struct Interpreter : std::exception
+	struct Parser : Exception
 	{
-		Interpreter(const std::string& message)
-		{
-			this->message = "[Interpret Error] " + message;
-		}
+		Parser(const std::string& message) : Exception("[Parse Error] " + message) {}
+	};
 
-		const char* what() const override
-		{
-			return message.c_str();
-		}
-
-		std::string message;
+	struct Interpreter : Exception
+	{
+		Interpreter(const std::string& message) : Exception("[Interpret Error] " + message) {}
 	};
 }
 
