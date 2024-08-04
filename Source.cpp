@@ -71,7 +71,11 @@ struct Operator
 
 	uint8_t precedence;
 	uint8_t arguments;
+
+	static uint8_t MAX_PRECEDENCE;
 };
+
+uint8_t Operator::MAX_PRECEDENCE = std::numeric_limits<uint8_t>::max();
 
 struct Token
 {
@@ -84,6 +88,8 @@ struct Token
 		Literal_NumericBase2,
 		Literal_String,
 		Symbol,
+		Comma,
+		Semicolon,
 		Operator,
 		Parenthesis_Open,
 		Parenthesis_Close
@@ -102,6 +108,8 @@ struct Token
 		case Type::Literal_NumericBase2:   s = "[Literal, Numeric 2  ] "; break;
 		case Type::Literal_String:         s = "[Literal, String     ] "; break;
 		case Type::Symbol:			       s = "[Symbol              ] "; break;
+		case Type::Comma:			       s = "[Comma               ] "; break;
+		case Type::Semicolon:			   s = "[Semicolon           ] "; break;
 		case Type::Operator:		       s = "[Operator            ] "; break;
 		case Type::Parenthesis_Open:       s = "[Parenthesis, Open   ] "; break;
 		case Type::Parenthesis_Close:      s = "[Parenthesis, Close  ] "; break;
@@ -164,7 +172,7 @@ public:
 				if (guard::Digits[*now])
 				{
 					token = { Token::Type::None, std::string(1, *now) };
- 
+
 					// Check for base
 					if (*now == '0')
 					{
@@ -217,6 +225,18 @@ public:
 					stateNext = State::CompleteToken;
 
 					parenthesesBalancer--;
+				}
+
+				else if (*now == ',')
+				{
+					token = { Token::Type::Comma, std::string(1, *now) };
+					stateNext = State::CompleteToken;
+				}
+
+				else if (*now == ';')
+				{
+					token = { Token::Type::Semicolon, std::string(1, *now) };
+					stateNext = State::CompleteToken;
 				}
 
 				else
@@ -424,8 +444,8 @@ std::unordered_map<std::string, Operator> Parser::s_Operators =
 	{"/", { Operator::Type::Division, 2, 2 } },
 
 	// Unary operators (in that way they are easier to handle)
-	{"u-", { Operator::Type::Subtraction, UINT8_MAX, 1 } },
-	{"u+", { Operator::Type::Addition, UINT8_MAX, 1 } },
+	{"u-", { Operator::Type::Subtraction, Operator::MAX_PRECEDENCE, 1 } },
+	{"u+", { Operator::Type::Addition, Operator::MAX_PRECEDENCE, 1 } },
 };
 
 class Interpreter
@@ -471,7 +491,7 @@ public:
 			case Token::Type::Operator:
 			{
 				Operator op = Parser::s_Operators[token.value];
-				
+
 				// Check for an unary operator
 				if (token.value == "+" || token.value == "-")
 				{
@@ -487,14 +507,14 @@ public:
 					holding.pop_back();
 				}
 
-				// only then append current tokin to the holding stack
+				// only then append current token to the holding stack
 				holding.push_back(token);
 			}
 			break;
 
 			case Token::Type::Parenthesis_Open:
 				holding.push_back(token);
-			break;
+				break;
 
 			case Token::Type::Parenthesis_Close:
 			{
@@ -504,7 +524,7 @@ public:
 					output.push_back(holding.back());
 					holding.pop_back();
 				}
-				
+
 				// And remove the parenthesis by itself
 				holding.pop_back();
 			}
@@ -521,7 +541,7 @@ public:
 			output.push_back(holding.back());
 			holding.pop_back();
 		}
-		
+
 		while (!output.empty())
 		{
 			const auto token = output.front();
@@ -555,7 +575,7 @@ public:
 					throw error::Interpreter("Not enough arguments for the operator: " + token.value);
 
 				Token token;
-				
+
 				switch (op.arguments)
 				{
 				case 1:
@@ -636,7 +656,8 @@ int main()
 		{
 			std::cerr << e.what() << std::endl;
 		}
-	} while (input != "quit");
+	}
+	while (input != "quit");
 
 	return 0;
 }
